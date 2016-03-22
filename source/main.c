@@ -100,6 +100,30 @@ typedef struct
 
 #define MAX_SECTIONS_LENGTH 10
 
+#define NUM_GRADES 19
+const char GRADE_STRINGS[NUM_GRADES][2] =
+{
+    " 9",
+    " 8",
+    " 7",
+    " 6",
+    " 5",
+    " 4",
+    " 3",
+    " 2",
+    " 1",
+    "S1",
+    "S2",
+    "S3",
+    "S4",
+    "S5",
+    "S6",
+    "S7",
+    "S8",
+    "S9",
+    "GM",
+};
+
 typedef struct
 {
     int tet;
@@ -137,6 +161,10 @@ typedef struct
     int sections_length;
     int current_section_index;
 
+    u32 score;
+    u8 combo;
+    u8 soft_drop_frames;
+
     u8 gravity;
     u8 gravity_multiplier;
     u8 gcount;
@@ -152,11 +180,90 @@ typedef struct
 } Game;
 
 
-static u8 check_clear_lines(s8 board[BOARD_HEIGHT][BOARD_WIDTH])
+static u8 current_grade(Game *g)
+{
+    // TODO: GM
+    if (g->score >= 120000)
+    {
+        return 17;
+    }
+    else if (g->score >= 100000)
+    {
+        return 16;
+    }
+    else if (g->score >= 82000)
+    {
+        return 15;
+    }
+    else if (g->score >= 66000)
+    {
+        return 14;
+    }
+    else if (g->score >= 52000)
+    {
+        return 13;
+    }
+    else if (g->score >= 40000)
+    {
+        return 12;
+    }
+    else if (g->score >= 30000)
+    {
+        return 11;
+    }
+    else if (g->score >= 22000)
+    {
+        return 10;
+    }
+    else if (g->score >= 16000)
+    {
+        return 9;
+    }
+    else if (g->score >= 12000)
+    {
+        return 8;
+    }
+    else if (g->score >= 8000)
+    {
+        return 7;
+    }
+    else if (g->score >= 5500)
+    {
+        return 6;
+    }
+    else if (g->score >= 3500)
+    {
+        return 5;
+    }
+    else if (g->score >= 2000)
+    {
+        return 4;
+    }
+    else if (g->score >= 1400)
+    {
+        return 3;
+    }
+    else if (g->score >= 800)
+    {
+        return 2;
+    }
+    else if (g->score >= 400)
+    {
+        return 1;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+static u8 check_clear_lines(s8 board[BOARD_HEIGHT][BOARD_WIDTH], u8 *bravo)
 {
     u8 line_count = 0;
     int row, col;
-    // TODO: should this start at 2
+
+    *bravo = 4;
+
     for (row = 2; row < BOARD_HEIGHT; row++)
     {
         bool line = true;
@@ -166,6 +273,10 @@ static u8 check_clear_lines(s8 board[BOARD_HEIGHT][BOARD_WIDTH])
             {
                 line = false;
                 //break; //TODO: is this ok
+            }
+            else
+            {
+                *bravo = 1;
             }
         }
 
@@ -376,28 +487,28 @@ static void next_piece(Piece *piece, Piece *new_piece, u64 *state, int history[H
     {
         found = false;
         new_piece->tet = next_piece__randpiece(state);
-        DEBUG(printf("generated piece %d, ", new_piece->tet));
+        //DEBUG(printf("generated piece %d, ", new_piece->tet));
         for (j = 0; j < HISTORY_LENGTH; j++)
         {
             if (history[j] == new_piece->tet)
             {
-                DEBUG(printf("found in history\n"));
+                //DEBUG(printf("found in history\n"));
                 found = true;
                 break;
             }
         }
         if (!found)
         {
-            DEBUG(printf("done generating\n"));
+            //DEBUG(printf("done generating\n"));
             break;
         }
     }
-    DEBUG(
-        if (found)
-        {
-            printf("gave up, generated history piece\n");
-        }
-        );
+    /* DEBUG( */
+    /*     if (found) */
+    /*     { */
+    /*         printf("gave up, generated history piece\n"); */
+    /*     } */
+    /*     ); */
 
     if (first_piece)
     {
@@ -431,15 +542,29 @@ static inline void lock(Game* g)
             }
         }
     }
-    u8 lines_cleared = check_clear_lines(g->board);
+
+    u8 bravo;
+    u8 lines_cleared = check_clear_lines(g->board, &bravo);
     if (lines_cleared == 0)
     {
         g->arecount = g->are;
+        g->combo = 1;
     }
     else
     {
         g->arecount = g->line_are;
         ASSERT(lines_cleared > 0 && lines_cleared < 5, "%hhd", lines_cleared);
+
+        // https://tetris.wiki/Tetris_The_Grand_Master#Scoring
+        // note that combo should be updated after calculating score, not before
+        // the page (as of 3/22/16) is wrong about this
+        g->score += ((g->level + lines_cleared - 1) / 4 + 1 + g->soft_drop_frames)
+            * lines_cleared * (2 * lines_cleared - 1) * g->combo * bravo;
+        g->combo += 2 * lines_cleared - 2;
+
+        DEBUG(printf("level: %hhu, lines: %hhu, sdf: %hhu, combo: %hhu, bravo: %hhu\n",
+                     g->level, lines_cleared, g->soft_drop_frames, g->combo, bravo));
+
         g->level += lines_cleared;
         if (g->level >= g->sections[g->current_section_index]
             && g->current_section_index < g->sections_length - 1)
@@ -504,6 +629,10 @@ static inline void game_init(Game* g)
     g->sections[9] = 999;
     g->sections_length = 10;
     g->current_section_index = 0;
+
+    g->score = 0;
+    g->combo = 1;
+    g->soft_drop_frames = 0;
 
     g->gravity = 0;
     g->gcount = g->gcount;
@@ -618,6 +747,12 @@ static inline void game_update(Game* g)
             {
                 horiz_move(g->board, &(g->piece), 1);
             }
+
+            // soft drop score bonus
+            if (g->curr_keys & KN__SOFT_DROP)
+            {
+                g->soft_drop_frames++;
+            }
         }
         else
         {
@@ -625,6 +760,8 @@ static inline void game_update(Game* g)
             g->piece_inactive = false;
             g->gcount = g->gravity;
             g->ldcount = g->lock_delay;
+
+            g->soft_drop_frames = 0;
 
             g->level++;
             if (g->level == g->sections[g->current_section_index])
@@ -803,7 +940,7 @@ static void draw_int(u8* frame_buffer, int n, u8 scale, int x, int y, Color c)
 }
 
 // x and y specify the top-left corner of the first character of the string
-static void draw_str(u8* frame_buffer, char* str, int len, u8 scale, int x, int y, Color c)
+static void draw_str(u8* frame_buffer, const char* str, int len, u8 scale, int x, int y, Color c)
 {
     y = 240 - y;
     int row, col, i;
@@ -921,6 +1058,8 @@ static inline void game_render(Game* g, u8* frame_buffer)
     draw_int(frame_buffer, g->level, 3, 320, 100, c);
     draw_int(frame_buffer, g->sections[g->current_section_index], 3, 320, 130, c);
 
+    draw_str(frame_buffer, GRADE_STRINGS[current_grade(g)], 2, 3, 40, 40, c);
+
     u8 csecs, seconds, minutes;
     if (g->timer > 0)
     {
@@ -934,9 +1073,14 @@ static inline void game_render(Game* g, u8* frame_buffer)
         seconds = 0;
         minutes = 0;
     }
-    char timer_str[9];
-    sprintf(timer_str, "%02hhd:%02hhd:%02hhd", minutes, seconds, csecs);
-    draw_str(frame_buffer, timer_str, 8, 2, 30, 100, c);
+    char temp_str[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+    sprintf(temp_str, "%02hhd:%02hhd:%02hhd", minutes, seconds, csecs);
+    draw_str(frame_buffer, temp_str, strlen(temp_str), 2, 30, 100, c);
+
+    memset(temp_str, 0, sizeof(temp_str));
+    sprintf(temp_str, "%lu", g->score);
+    u8 l = strlen(temp_str);
+    draw_str(frame_buffer, temp_str, l, 1, 40 + 6 * (9 - l), 150, c);
 }
 
 
@@ -1024,13 +1168,13 @@ int main()
         u8* frame_buffer = gfxGetFramebuffer(GFX_TOP, GFX_LEFT, NULL, NULL);
 
         frame_count++;
-        if (frame_count % 60 == 0)
-        {
-            if (frame_count % 120 == 0)
-                printf("tock   %d\n", frame_count);
-            else
-                printf("tick   %d\n", frame_count);
-        }
+        /* if (frame_count % 60 == 0) */
+        /* { */
+        /*     if (frame_count % 120 == 0) */
+        /*         printf("tock   %d\n", frame_count); */
+        /*     else */
+        /*         printf("tick   %d\n", frame_count); */
+        /* } */
 
         input_update_render(&g, frame_buffer);
 
