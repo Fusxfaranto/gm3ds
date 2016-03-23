@@ -99,29 +99,19 @@ typedef struct
 #define HISTORY_TRIES 4
 
 #define MAX_SECTIONS_LENGTH 10
+const u32 SECTION_SCORE_REQ[MAX_SECTIONS_LENGTH] = {0, 0, 12000, 0, 40000, 0, 0, 0, 0, 126000};
+const u32 SECTION_TIME_REQ[MAX_SECTIONS_LENGTH] = {-1, -1, 15300, -1, 27000, 0, 0, 0, 0, 48600};
 
 #define NUM_GRADES 19
-const char GRADE_STRINGS[NUM_GRADES][2] =
+const char GRADE_STRINGS[NUM_GRADES][2] = {" 9", " 8", " 7", " 6", " 5", " 4", " 3", " 2", " 1",
+                                           "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "GM"};
+#define GRADE_SCORES__TRIMARK ((u32)-1)
+#define GRADE_SCORES__TRIDASH ((u32)-2)
+const u32 GRADE_SCORES[NUM_GRADES + 1] =
 {
-    " 9",
-    " 8",
-    " 7",
-    " 6",
-    " 5",
-    " 4",
-    " 3",
-    " 2",
-    " 1",
-    "S1",
-    "S2",
-    "S3",
-    "S4",
-    "S5",
-    "S6",
-    "S7",
-    "S8",
-    "S9",
-    "GM",
+    0, 400, 800, 1400, 2000, 3500, 5500, 8000, 12000,
+    16000, 22000, 30000, 40000, 52000, 66000, 82000, 100000, 120000,
+    GRADE_SCORES__TRIMARK, GRADE_SCORES__TRIDASH
 };
 
 typedef struct
@@ -164,6 +154,7 @@ typedef struct
     u32 score;
     u8 combo;
     u8 soft_drop_frames;
+    bool gm_eligible;
 
     u8 gravity;
     u8 gravity_multiplier;
@@ -182,79 +173,13 @@ typedef struct
 
 static u8 current_grade(Game *g)
 {
-    // TODO: GM
-    if (g->score >= 120000)
+    if (g->level >= 999 && g->gm_eligible)
     {
-        return 17;
+        return NUM_GRADES;
     }
-    else if (g->score >= 100000)
-    {
-        return 16;
-    }
-    else if (g->score >= 82000)
-    {
-        return 15;
-    }
-    else if (g->score >= 66000)
-    {
-        return 14;
-    }
-    else if (g->score >= 52000)
-    {
-        return 13;
-    }
-    else if (g->score >= 40000)
-    {
-        return 12;
-    }
-    else if (g->score >= 30000)
-    {
-        return 11;
-    }
-    else if (g->score >= 22000)
-    {
-        return 10;
-    }
-    else if (g->score >= 16000)
-    {
-        return 9;
-    }
-    else if (g->score >= 12000)
-    {
-        return 8;
-    }
-    else if (g->score >= 8000)
-    {
-        return 7;
-    }
-    else if (g->score >= 5500)
-    {
-        return 6;
-    }
-    else if (g->score >= 3500)
-    {
-        return 5;
-    }
-    else if (g->score >= 2000)
-    {
-        return 4;
-    }
-    else if (g->score >= 1400)
-    {
-        return 3;
-    }
-    else if (g->score >= 800)
-    {
-        return 2;
-    }
-    else if (g->score >= 400)
-    {
-        return 1;
-    }
-    else
-    {
-        return 0;
-    }
+    int i;
+    for (i = NUM_GRADES - 1; GRADE_SCORES[i] > g->score; i--) {ASSERT(i != (u32)-1, "current_grade out of bounds");}
+    return i;
 }
 
 static u8 check_clear_lines(s8 board[BOARD_HEIGHT][BOARD_WIDTH], u8 *bravo)
@@ -474,7 +399,8 @@ static int next_piece__randpiece(u64* state)
     else { return piece; }
 }
 
-static void next_piece(Piece *piece, Piece *new_piece, u64 *state, int history[HISTORY_LENGTH], bool first_piece)
+static void next_piece(Piece *piece, Piece *new_piece, u64 *state,
+                       int history[HISTORY_LENGTH], bool first_piece)
 {
     *piece = *new_piece;
     piece->pos.x = 3;
@@ -560,15 +486,20 @@ static inline void lock(Game* g)
         // the page (as of 3/22/16) is wrong about this
         g->score += ((g->level + lines_cleared - 1) / 4 + 1 + g->soft_drop_frames)
             * lines_cleared * (2 * lines_cleared - 1) * g->combo * bravo;
-        g->combo += 2 * lines_cleared - 2;
-
         DEBUG(printf("level: %hhu, lines: %hhu, sdf: %hhu, combo: %hhu, bravo: %hhu\n",
                      g->level, lines_cleared, g->soft_drop_frames, g->combo, bravo));
+        g->combo += 2 * lines_cleared - 2;
 
         g->level += lines_cleared;
         if (g->level >= g->sections[g->current_section_index]
             && g->current_section_index < g->sections_length - 1)
         {
+            if (g->score < SECTION_SCORE_REQ[g->current_section_index] ||
+                g->timer >= SECTION_TIME_REQ[g->current_section_index])
+            {
+                g->gm_eligible = false;
+            }
+
             g->current_section_index++;
         }
     }
@@ -633,6 +564,7 @@ static inline void game_init(Game* g)
     g->score = 0;
     g->combo = 1;
     g->soft_drop_frames = 0;
+    g->gm_eligible = true;
 
     g->gravity = 0;
     g->gcount = g->gcount;
@@ -715,6 +647,14 @@ static inline void game_update(Game* g)
         g->dascount = 0;
     }
 
+    if (g->arecount > 0)
+    {
+        g->arecount -= 1;
+        if (g->arecount == g->line_are / 2)
+        {
+            cascade(g->board);
+        }
+    }
     if (g->arecount == 0)
     {
         if (!g->piece_inactive)
@@ -859,14 +799,6 @@ static inline void game_update(Game* g)
             {
                 g->ldcount -= 1;
             }
-        }
-    }
-    else
-    {
-        g->arecount -= 1;
-        if (g->arecount == g->line_are / 2)
-        {
-            cascade(g->board);
         }
     }
 }
@@ -1058,7 +990,8 @@ static inline void game_render(Game* g, u8* frame_buffer)
     draw_int(frame_buffer, g->level, 3, 320, 100, c);
     draw_int(frame_buffer, g->sections[g->current_section_index], 3, 320, 130, c);
 
-    draw_str(frame_buffer, GRADE_STRINGS[current_grade(g)], 2, 3, 40, 40, c);
+    u8 grade = current_grade(g);
+    draw_str(frame_buffer, GRADE_STRINGS[grade], 2, 3, 40, 40, c);
 
     u8 csecs, seconds, minutes;
     if (g->timer > 0)
@@ -1073,14 +1006,36 @@ static inline void game_render(Game* g, u8* frame_buffer)
         seconds = 0;
         minutes = 0;
     }
-    char temp_str[9] = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+    char temp_str[10] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     sprintf(temp_str, "%02hhd:%02hhd:%02hhd", minutes, seconds, csecs);
     draw_str(frame_buffer, temp_str, strlen(temp_str), 2, 30, 100, c);
 
+    draw_str(frame_buffer, "NEXT: ", 6, 1, 30, 160, c);
+    memset(temp_str, 0, sizeof(temp_str));
+    if (GRADE_SCORES[grade] == GRADE_SCORES__TRIDASH)
+    {
+        sprintf(temp_str, "---");
+    }
+    else if (GRADE_SCORES[grade] == GRADE_SCORES__TRIMARK)
+    {
+        sprintf(temp_str, "???");
+    }
+    else
+    {
+        sprintf(temp_str, "%lu", GRADE_SCORES[grade + 1]);
+    }
+    u8 l = strlen(temp_str);
+    draw_str(frame_buffer, temp_str, l, 1, 120 - 6 * l, 160, c);
+
     memset(temp_str, 0, sizeof(temp_str));
     sprintf(temp_str, "%lu", g->score);
-    u8 l = strlen(temp_str);
-    draw_str(frame_buffer, temp_str, l, 1, 40 + 6 * (9 - l), 150, c);
+    l = strlen(temp_str);
+    if (g->gm_eligible)
+    {
+        c.g = 0xD0;
+        c.b = 0x80;
+    }
+    draw_str(frame_buffer, temp_str, l, 1, 120 - 6 * l, 150, c);
 }
 
 
