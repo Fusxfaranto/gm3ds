@@ -486,7 +486,7 @@ static inline void lock(Game* g)
         // the page (as of 3/22/16) is wrong about this
         g->score += ((g->level + lines_cleared - 1) / 4 + 1 + g->soft_drop_frames)
             * lines_cleared * (2 * lines_cleared - 1) * g->combo * bravo;
-        DEBUG(printf("level: %hhu, lines: %hhu, sdf: %hhu, combo: %hhu, bravo: %hhu\n",
+        DEBUG(printf("level: %d, lines: %hhu, sdf: %hhu, combo: %hhu, bravo: %hhu\n",
                      g->level, lines_cleared, g->soft_drop_frames, g->combo, bravo));
         g->combo += 2 * lines_cleared - 2;
 
@@ -1012,11 +1012,11 @@ static inline void game_render(Game* g, u8* frame_buffer)
 
     draw_str(frame_buffer, "NEXT: ", 6, 1, 30, 160, c);
     memset(temp_str, 0, sizeof(temp_str));
-    if (GRADE_SCORES[grade] == GRADE_SCORES__TRIDASH)
+    if (GRADE_SCORES[grade + 1] == GRADE_SCORES__TRIDASH)
     {
         sprintf(temp_str, "---");
     }
-    else if (GRADE_SCORES[grade] == GRADE_SCORES__TRIMARK)
+    else if (GRADE_SCORES[grade + 1] == GRADE_SCORES__TRIMARK)
     {
         sprintf(temp_str, "???");
     }
@@ -1145,3 +1145,11 @@ int main()
 
     return 0;
 }
+
+
+/*
+ * TODO
+ * frame-step debug button
+ * button remapping (inc multiple keys per same button)
+ * an actual menu???
+ */
