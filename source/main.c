@@ -15,6 +15,9 @@
         })
 
 
+typedef struct Game Game;
+
+
 typedef enum
 {
     KN__SONIC_DROP = BIT(0),
@@ -105,13 +108,13 @@ const u32 SECTION_TIME_REQ[MAX_SECTIONS_LENGTH] = {-1, -1, 15300, -1, 27000, 0, 
 #define NUM_GRADES 19
 const char GRADE_STRINGS[NUM_GRADES][2] = {" 9", " 8", " 7", " 6", " 5", " 4", " 3", " 2", " 1",
                                            "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9", "GM"};
-#define GRADE_SCORES__TRIMARK ((u32)-1)
+#define GRADE_SCORES__HEXMARK ((u32)-1)
 #define GRADE_SCORES__TRIDASH ((u32)-2)
 const u32 GRADE_SCORES[NUM_GRADES + 1] =
 {
     0, 400, 800, 1400, 2000, 3500, 5500, 8000, 12000,
     16000, 22000, 30000, 40000, 52000, 66000, 82000, 100000, 120000,
-    GRADE_SCORES__TRIMARK, GRADE_SCORES__TRIDASH
+    GRADE_SCORES__HEXMARK, GRADE_SCORES__TRIDASH
 };
 
 typedef struct
@@ -123,16 +126,57 @@ typedef struct
 
 typedef enum
 {
-    MS__IN_GAME,
-    MS__PAUSED,
-    MS__LOSE_SCREEN,
-    MS__MAIN_MENU,
-    MS__QUITTING,
-} MenuState;
+    PS__IN_GAME,
+    PS__PAUSED,
+    PS__LOSE_SCREEN,
+    PS__MAIN_MENU,
+    PS__QUITTING,
+} ProgState;
+
+#define NUM_MENU_ITEMS 3
+#define MAX_MENU_ITEM_LENGTH 40
 
 typedef struct
 {
-    MenuState menu_state;
+    u8 cursor_pos;
+    char item_strs[NUM_MENU_ITEMS][MAX_MENU_ITEM_LENGTH];
+    void (*item_callbacks[NUM_MENU_ITEMS])(Game*, u32, u8);
+} Menu;
+
+typedef struct
+{
+    int level;
+    u16 gravity;
+    u8 are;
+    u8 line_are;
+    u8 das;
+    u8 lock_delay;
+} Speed;
+
+#define MAX_SPEED_CHANGES 50
+
+typedef struct
+{
+    int sections[MAX_SECTIONS_LENGTH];
+    Speed speeds[MAX_SPEED_CHANGES];
+    u8 sections_length;
+    u8 speeds_length;
+} GameParams;
+
+#define NUM_MODES 4
+#define DEFAULT__TGM 0
+#define DEFAULT__TGM20G 1
+#define DEFAULT__DEATH 2
+#define DEFAULT__TGM20GILD 3
+const char *MODE_NAMES[NUM_MODES] = {"TGM", "TGM 20G", "T.A. DEATH", "TGM 20G (INF LD)"};
+
+#define INF_LOCK_DELAY 255
+
+struct Game
+{
+    Menu menu;
+
+    ProgState prog_state;
     u64 rngstate;
     s32 timer;
 
@@ -146,29 +190,25 @@ typedef struct
     Piece next_piece;
     bool piece_inactive;
 
-    int level;
-    int sections[MAX_SECTIONS_LENGTH];
-    int sections_length;
-    int current_section_index;
-
     u32 score;
     u8 combo;
     u8 soft_drop_frames;
     bool gm_eligible;
 
-    u8 gravity;
-    u8 gravity_multiplier;
-    u8 gcount;
-    u8 lock_delay;
-    bool inf_lock_delay;
+    GameParams defaults[NUM_MODES];
+    GameParams p;
+    u8 mode_index;
+
+    int level;
+    u8 current_section_index;
+    u8 current_speed_index;
+
+    u16 gcount;
     u8 ldcount;
-    u8 line_are;
-    u8 are;
     u8 arecount;
-    u8 das;
     u8 dascount;
-    int das_direction;
-} Game;
+    s8 das_direction;
+};
 
 
 static u8 current_grade(Game *g)
@@ -185,14 +225,13 @@ static u8 current_grade(Game *g)
 static u8 check_clear_lines(s8 board[BOARD_HEIGHT][BOARD_WIDTH], u8 *bravo)
 {
     u8 line_count = 0;
-    int row, col;
 
     *bravo = 4;
 
-    for (row = 2; row < BOARD_HEIGHT; row++)
+    for (int row = 2; row < BOARD_HEIGHT; row++)
     {
         bool line = true;
-        for (col = 0; col < BOARD_WIDTH; col++)
+        for (int col = 0; col < BOARD_WIDTH; col++)
         {
             if (board[row][col] == 0)
             {
@@ -208,7 +247,7 @@ static u8 check_clear_lines(s8 board[BOARD_HEIGHT][BOARD_WIDTH], u8 *bravo)
         if (line)
         {
             line_count++;
-            for (col = 0; col < BOARD_WIDTH; col++)
+            for (int col = 0; col < BOARD_WIDTH; col++)
             {
                 board[row][col] = 0;
             }
@@ -219,12 +258,11 @@ static u8 check_clear_lines(s8 board[BOARD_HEIGHT][BOARD_WIDTH], u8 *bravo)
 
 static void cascade(s8 board[BOARD_HEIGHT][BOARD_WIDTH])
 {
-    int row, col;
     // TODO: should this start at 2
-    for (row = 2; row < BOARD_HEIGHT; row++)
+    for (int row = 2; row < BOARD_HEIGHT; row++)
     {
         bool empty = true;
-        for (col = 0; col < BOARD_WIDTH; col++)
+        for (int col = 0; col < BOARD_WIDTH; col++)
         {
             if (board[row][col] != 0) {
                 empty = false;
@@ -234,16 +272,15 @@ static void cascade(s8 board[BOARD_HEIGHT][BOARD_WIDTH])
 
         if (empty)
         {
-            int row2;
             //TODO maybe make a little nicer once everything confirmed working
-            for (row2 = row - 1; row2 >= 0; row2--)
+            for (int row2 = row - 1; row2 >= 0; row2--)
             {
-                for (col = 0; col < BOARD_WIDTH; col++)
+                for (int col = 0; col < BOARD_WIDTH; col++)
                 {
                     board[row2 + 1][col] = board[row2][col];
                 }
             }
-            for (col = 0; col < BOARD_WIDTH; col++)
+            for (int col = 0; col < BOARD_WIDTH; col++)
             {
                 board[0][col] = 0;
             }
@@ -253,10 +290,9 @@ static void cascade(s8 board[BOARD_HEIGHT][BOARD_WIDTH])
 
 static bool check_move(s8 board[BOARD_HEIGHT][BOARD_WIDTH], Piece* piece)
 {
-    int row, col;
-    for (row = 0; row < 4; row++)
+    for (int row = 0; row < 4; row++)
     {
-        for (col = 0; col < 4; col++)
+        for (int col = 0; col < 4; col++)
         {
             if (TETROMINOS[piece->tet][piece->rot][row][col] != 0)
             {
@@ -350,7 +386,7 @@ static inline void rotate(s8 board[BOARD_HEIGHT][BOARD_WIDTH], Piece* piece, int
     }
 }
 
-static inline void horiz_move(s8 board[BOARD_HEIGHT][BOARD_WIDTH], Piece* piece, int amt)
+static inline void horiz_move(s8 board[BOARD_HEIGHT][BOARD_WIDTH], Piece* piece, s8 amt)
 {
     piece->pos.x += amt;
     if (!check_move(board, piece))
@@ -371,8 +407,7 @@ static bool next_piece__rng(u64* state)
     u64 new_state = next_piece__rule30(*state & (1ULL << 63ULL),
                                        *state & (1ULL << 0ULL),
                                        *state & (1ULL << 1ULL));
-    u64 i;
-    for (i = 2ULL; i < (1ULL << 63ULL); i <<= 1ULL)
+    for (u64 i = 2ULL; i < (1ULL << 63ULL); i <<= 1ULL)
     {
         new_state += next_piece__rule30(*state & (i >> 1ULL),
                                         *state & i,
@@ -407,14 +442,13 @@ static void next_piece(Piece *piece, Piece *new_piece, u64 *state,
     piece->pos.y = 1;
     piece->rot = 0;
 
-    int i, j;
     bool found;
-    for (i = 0; i < HISTORY_TRIES; i++)
+    for (int i = 0; i < HISTORY_TRIES; i++)
     {
         found = false;
         new_piece->tet = next_piece__randpiece(state);
         //DEBUG(printf("generated piece %d, ", new_piece->tet));
-        for (j = 0; j < HISTORY_LENGTH; j++)
+        for (int j = 0; j < HISTORY_LENGTH; j++)
         {
             if (history[j] == new_piece->tet)
             {
@@ -444,7 +478,7 @@ static void next_piece(Piece *piece, Piece *new_piece, u64 *state,
         }
     }
 
-    for (i = HISTORY_LENGTH - 1; i > 0; i--)
+    for (int i = HISTORY_LENGTH - 1; i > 0; i--)
     {
         history[i] = history[i - 1];
     }
@@ -455,10 +489,9 @@ static void next_piece(Piece *piece, Piece *new_piece, u64 *state,
 
 static inline void lock(Game* g)
 {
-    int row, col;
-    for (row = 0; row < 4; row++)
+    for (int row = 0; row < 4; row++)
     {
-        for (col = 0; col < 4; col++)
+        for (int col = 0; col < 4; col++)
         {
             if (TETROMINOS[g->piece.tet][g->piece.rot][row][col] != 0)
             {
@@ -473,12 +506,12 @@ static inline void lock(Game* g)
     u8 lines_cleared = check_clear_lines(g->board, &bravo);
     if (lines_cleared == 0)
     {
-        g->arecount = g->are;
+        g->arecount = g->p.speeds[g->current_speed_index].are;
         g->combo = 1;
     }
     else
     {
-        g->arecount = g->line_are;
+        g->arecount = g->p.speeds[g->current_speed_index].line_are;
         ASSERT(lines_cleared > 0 && lines_cleared < 5, "%hhd", lines_cleared);
 
         // https://tetris.wiki/Tetris_The_Grand_Master#Scoring
@@ -491,8 +524,8 @@ static inline void lock(Game* g)
         g->combo += 2 * lines_cleared - 2;
 
         g->level += lines_cleared;
-        if (g->level >= g->sections[g->current_section_index]
-            && g->current_section_index < g->sections_length - 1)
+        if (g->level >= g->p.sections[g->current_section_index]
+            && g->current_section_index < g->p.sections_length - 1)
         {
             if (g->score < SECTION_SCORE_REQ[g->current_section_index] ||
                 g->timer >= SECTION_TIME_REQ[g->current_section_index])
@@ -504,24 +537,98 @@ static inline void lock(Game* g)
         }
     }
     g->piece_inactive = true;
+
+
 }
 
 
-static inline void game_init(Game* g)
+static inline void game_reset(Game* g)
 {
-    g->menu_state = MS__MAIN_MENU;
-
     //g->rngstate = 1311666606263354484;
     g->rngstate = osGetTime();
     DEBUG(printf("%llu\n", g->rngstate));
-    int i;
-    for (i = 0; i < 100; i++) next_piece__randpiece(&(g->rngstate));
+    for (int i = 0; i < 100; i++) next_piece__randpiece(&(g->rngstate));
     DEBUG(printf("%llu\n", g->rngstate));
 
     g->timer = -60; // to reach zero when piece actually starts
 
     g->curr_keys = 0;
     g->old_keys = 0;
+
+    memset(g->board, 0, BOARD_HEIGHT * BOARD_WIDTH);
+
+    _Static_assert(HISTORY_LENGTH == 4, "need to update history initialization");
+    g->history[0] = PIECE__Z;
+    g->history[1] = PIECE__Z;
+    g->history[2] = PIECE__Z;
+    g->history[3] = PIECE__Z;
+
+    next_piece(&(g->piece), &(g->next_piece), &(g->rngstate), g->history, true);
+
+    g->level = 0;
+    g->current_section_index = 0;
+    g->current_speed_index = 0;
+
+    g->score = 0;
+    g->combo = 1;
+    g->soft_drop_frames = 0;
+    g->gm_eligible = true;
+
+    g->piece_inactive = true;
+    g->gcount = 0;
+    g->ldcount = g->p.speeds[g->current_speed_index].lock_delay;
+    g->arecount = -g->timer;
+    g->dascount = 0;
+    g->das_direction = 0;
+}
+
+
+static void menu_item_callback_start(Game* g, u32 k_down, u8 menu_idx)
+{
+    if (k_down & KEY_A)
+    {
+        game_reset(g);
+        g->prog_state = PS__IN_GAME;
+    }
+}
+
+static void menu_item_callback_mode_change(Game* g, u32 k_down, u8 menu_idx)
+{
+    if (k_down & KEY_DLEFT)
+    {
+        g->mode_index += NUM_MODES;
+        g->mode_index--;
+    }
+    if (k_down & KEY_RIGHT)
+    {
+        g->mode_index++;
+    }
+    g->mode_index %= NUM_MODES;
+
+    memcpy(&g->p, &g->defaults[g->mode_index], sizeof(GameParams));
+
+    strcpy(g->menu.item_strs[menu_idx] + 8, MODE_NAMES[g->mode_index]);
+    strcpy(g->menu.item_strs[menu_idx] + 8 + strlen(MODE_NAMES[g->mode_index]), " >");
+
+    if (k_down & KEY_A)
+    {
+        menu_item_callback_start(g, k_down, menu_idx);
+    }
+}
+
+static void menu_item_callback_quit(Game* g, u32 k_down, u8 menu_idx)
+{
+    if (k_down & KEY_A)
+    {
+        g->prog_state = PS__QUITTING;
+    }
+}
+
+//static void menu_item_callback_noop(Game* g, u32 k_down, u8 menu_idx) {}
+
+static inline void game_init(Game* g)
+{
+    g->prog_state = PS__MAIN_MENU;
 
     _Static_assert(NUM_KEY_NAMES == 8, "need to update key config");
     g->key_config[0 /*KN__SONIC_DROP*/] = KEY_DUP;
@@ -533,55 +640,150 @@ static inline void game_init(Game* g)
     g->key_config[6 /*KN__B*/] = KEY_A;
     g->key_config[7 /*KN__C*/] = KEY_NONE;
 
-    memset(g->board, 0, BOARD_HEIGHT * BOARD_WIDTH);
+    g->defaults[DEFAULT__TGM].sections_length = 10;
+    for (int i = 0; i < 9; i++) g->defaults[DEFAULT__TGM].sections[i] = (i + 1) * 100;
+    g->defaults[DEFAULT__TGM].sections[9] = 999;
 
-    _Static_assert(HISTORY_LENGTH == 4, "need to update history initialization");
-    g->history[0] = PIECE__Z;
-    g->history[1] = PIECE__Z;
-    g->history[2] = PIECE__Z;
-    g->history[3] = PIECE__Z;
+    g->defaults[DEFAULT__TGM].speeds_length = 30;
+    for (int i = 0; i < g->defaults[DEFAULT__TGM].speeds_length; i++)
+    {
+        g->defaults[DEFAULT__TGM].speeds[i] = (Speed){0, 0, 30, 71, 14, 30};
+    }
+    g->defaults[DEFAULT__TGM].speeds[0].level = 0;
+    g->defaults[DEFAULT__TGM].speeds[0].gravity = 4;
+    g->defaults[DEFAULT__TGM].speeds[1].level = 30;
+    g->defaults[DEFAULT__TGM].speeds[1].gravity = 6;
+    g->defaults[DEFAULT__TGM].speeds[2].level = 35;
+    g->defaults[DEFAULT__TGM].speeds[2].gravity = 8;
+    g->defaults[DEFAULT__TGM].speeds[3].level = 40;
+    g->defaults[DEFAULT__TGM].speeds[3].gravity = 10;
+    g->defaults[DEFAULT__TGM].speeds[4].level = 50;
+    g->defaults[DEFAULT__TGM].speeds[4].gravity = 12;
+    g->defaults[DEFAULT__TGM].speeds[5].level = 60;
+    g->defaults[DEFAULT__TGM].speeds[5].gravity = 16;
+    g->defaults[DEFAULT__TGM].speeds[6].level = 70;
+    g->defaults[DEFAULT__TGM].speeds[6].gravity = 32;
+    g->defaults[DEFAULT__TGM].speeds[7].level = 80;
+    g->defaults[DEFAULT__TGM].speeds[7].gravity = 48;
+    g->defaults[DEFAULT__TGM].speeds[8].level = 90;
+    g->defaults[DEFAULT__TGM].speeds[8].gravity = 64;
+    g->defaults[DEFAULT__TGM].speeds[9].level = 100;
+    g->defaults[DEFAULT__TGM].speeds[9].gravity = 80;
+    g->defaults[DEFAULT__TGM].speeds[10].level = 120;
+    g->defaults[DEFAULT__TGM].speeds[10].gravity = 96;
+    g->defaults[DEFAULT__TGM].speeds[11].level = 140;
+    g->defaults[DEFAULT__TGM].speeds[11].gravity = 112;
+    g->defaults[DEFAULT__TGM].speeds[12].level = 160;
+    g->defaults[DEFAULT__TGM].speeds[12].gravity = 128;
+    g->defaults[DEFAULT__TGM].speeds[13].level = 170;
+    g->defaults[DEFAULT__TGM].speeds[13].gravity = 144;
+    g->defaults[DEFAULT__TGM].speeds[14].level = 200;
+    g->defaults[DEFAULT__TGM].speeds[14].gravity = 4;
+    g->defaults[DEFAULT__TGM].speeds[15].level = 220;
+    g->defaults[DEFAULT__TGM].speeds[15].gravity = 32;
+    g->defaults[DEFAULT__TGM].speeds[16].level = 230;
+    g->defaults[DEFAULT__TGM].speeds[16].gravity = 64;
+    g->defaults[DEFAULT__TGM].speeds[17].level = 233;
+    g->defaults[DEFAULT__TGM].speeds[17].gravity = 96;
+    g->defaults[DEFAULT__TGM].speeds[18].level = 236;
+    g->defaults[DEFAULT__TGM].speeds[18].gravity = 128;
+    g->defaults[DEFAULT__TGM].speeds[19].level = 239;
+    g->defaults[DEFAULT__TGM].speeds[19].gravity = 160;
+    g->defaults[DEFAULT__TGM].speeds[20].level = 243;
+    g->defaults[DEFAULT__TGM].speeds[20].gravity = 192;
+    g->defaults[DEFAULT__TGM].speeds[21].level = 247;
+    g->defaults[DEFAULT__TGM].speeds[21].gravity = 224;
+    g->defaults[DEFAULT__TGM].speeds[22].level = 251;
+    g->defaults[DEFAULT__TGM].speeds[22].gravity = 256;
+    g->defaults[DEFAULT__TGM].speeds[23].level = 300;
+    g->defaults[DEFAULT__TGM].speeds[23].gravity = 512;
+    g->defaults[DEFAULT__TGM].speeds[24].level = 330;
+    g->defaults[DEFAULT__TGM].speeds[24].gravity = 768;
+    g->defaults[DEFAULT__TGM].speeds[25].level = 360;
+    g->defaults[DEFAULT__TGM].speeds[25].gravity = 1024;
+    g->defaults[DEFAULT__TGM].speeds[26].level = 400;
+    g->defaults[DEFAULT__TGM].speeds[26].gravity = 1280;
+    g->defaults[DEFAULT__TGM].speeds[27].level = 420;
+    g->defaults[DEFAULT__TGM].speeds[27].gravity = 1024;
+    g->defaults[DEFAULT__TGM].speeds[28].level = 450;
+    g->defaults[DEFAULT__TGM].speeds[28].gravity = 768;
+    g->defaults[DEFAULT__TGM].speeds[29].level = 500;
+    g->defaults[DEFAULT__TGM].speeds[29].gravity = 5120;
 
-/*    g->piece.tet = 0;
-      g->piece.pos.x = 3;
-      g->piece.pos.y = 1;
-      g->piece.rot = 0;
+    memcpy(&g->defaults[DEFAULT__TGM20G], &g->defaults[DEFAULT__TGM], sizeof(GameParams));
+    for (int i = 0; i < g->defaults[DEFAULT__TGM20G].speeds_length; i++)
+    {
+        g->defaults[DEFAULT__TGM20G].speeds[i].gravity = 5120;
+    }
 
-      g->next_piece.tet = 1;
-      g->next_piece.pos.x = 3;
-      g->next_piece.pos.y = 1;
-      g->next_piece.rot = 0;*/
-    next_piece(&(g->piece), &(g->next_piece), &(g->rngstate), g->history, true);
-    //next_piece(&(g->piece), &(g->next_piece), &(g->rngstate), g->history, false);
+    memcpy(&g->defaults[DEFAULT__DEATH], &g->defaults[DEFAULT__TGM20G], sizeof(GameParams));
+    g->defaults[DEFAULT__DEATH].speeds_length = 9;
+    g->defaults[DEFAULT__DEATH].speeds[0].level = 0;
+    g->defaults[DEFAULT__DEATH].speeds[0].are = 16;
+    g->defaults[DEFAULT__DEATH].speeds[0].line_are = 24;
+    g->defaults[DEFAULT__DEATH].speeds[0].das = 10;
+    g->defaults[DEFAULT__DEATH].speeds[0].lock_delay = 30;
+    g->defaults[DEFAULT__DEATH].speeds[1].level = 101;
+    g->defaults[DEFAULT__DEATH].speeds[1].are = 12;
+    g->defaults[DEFAULT__DEATH].speeds[1].line_are = 12;
+    g->defaults[DEFAULT__DEATH].speeds[1].das = 10;
+    g->defaults[DEFAULT__DEATH].speeds[1].lock_delay = 26;
+    g->defaults[DEFAULT__DEATH].speeds[2].level = 200;
+    g->defaults[DEFAULT__DEATH].speeds[2].are = 12;
+    g->defaults[DEFAULT__DEATH].speeds[2].line_are = 12;
+    g->defaults[DEFAULT__DEATH].speeds[2].das = 9;
+    g->defaults[DEFAULT__DEATH].speeds[2].lock_delay = 26;
+    g->defaults[DEFAULT__DEATH].speeds[3].level = 201;
+    g->defaults[DEFAULT__DEATH].speeds[3].are = 12;
+    g->defaults[DEFAULT__DEATH].speeds[3].line_are = 12;
+    g->defaults[DEFAULT__DEATH].speeds[3].das = 9;
+    g->defaults[DEFAULT__DEATH].speeds[3].lock_delay = 22;
+    g->defaults[DEFAULT__DEATH].speeds[4].level = 300;
+    g->defaults[DEFAULT__DEATH].speeds[4].are = 12;
+    g->defaults[DEFAULT__DEATH].speeds[4].line_are = 12;
+    g->defaults[DEFAULT__DEATH].speeds[4].das = 8;
+    g->defaults[DEFAULT__DEATH].speeds[4].lock_delay = 22;
+    g->defaults[DEFAULT__DEATH].speeds[5].level = 301;
+    g->defaults[DEFAULT__DEATH].speeds[5].are = 6;
+    g->defaults[DEFAULT__DEATH].speeds[5].line_are = 12;
+    g->defaults[DEFAULT__DEATH].speeds[5].das = 8;
+    g->defaults[DEFAULT__DEATH].speeds[5].lock_delay = 18;
+    g->defaults[DEFAULT__DEATH].speeds[6].level = 400;
+    g->defaults[DEFAULT__DEATH].speeds[6].are = 6;
+    g->defaults[DEFAULT__DEATH].speeds[6].line_are = 12;
+    g->defaults[DEFAULT__DEATH].speeds[6].das = 6;
+    g->defaults[DEFAULT__DEATH].speeds[6].lock_delay = 18;
+    g->defaults[DEFAULT__DEATH].speeds[7].level = 401;
+    g->defaults[DEFAULT__DEATH].speeds[7].are = 5;
+    g->defaults[DEFAULT__DEATH].speeds[7].line_are = 10;
+    g->defaults[DEFAULT__DEATH].speeds[7].das = 6;
+    g->defaults[DEFAULT__DEATH].speeds[7].lock_delay = 15;
+    g->defaults[DEFAULT__DEATH].speeds[8].level = 500;
+    g->defaults[DEFAULT__DEATH].speeds[8].are = 4;
+    g->defaults[DEFAULT__DEATH].speeds[8].line_are = 8;
+    g->defaults[DEFAULT__DEATH].speeds[8].das = 6;
+    g->defaults[DEFAULT__DEATH].speeds[8].lock_delay = 15;
 
-    g->piece_inactive = true;
+    memcpy(&g->defaults[DEFAULT__TGM20GILD], &g->defaults[DEFAULT__TGM20G], sizeof(GameParams));
+    for (int i = 0; i < g->defaults[DEFAULT__TGM20GILD].speeds_length; i++)
+    {
+        g->defaults[DEFAULT__TGM20GILD].speeds[i].lock_delay = INF_LOCK_DELAY;
+    }
 
-    g->level = 0;
-    for (i = 0; i < 9; i++) g->sections[i] = (i + 1) * 100;
-    g->sections[9] = 999;
-    g->sections_length = 10;
-    g->current_section_index = 0;
+    memcpy(&g->p, &g->defaults[DEFAULT__TGM], sizeof(GameParams));
 
-    g->score = 0;
-    g->combo = 1;
-    g->soft_drop_frames = 0;
-    g->gm_eligible = true;
+    g->menu.cursor_pos = 0;
+    strcpy(g->menu.item_strs[0], "START");
+    g->menu.item_callbacks[0] = menu_item_callback_start;
+    strcpy(g->menu.item_strs[1], "MODE: < PLACEHOLDER >");
+    g->menu.item_callbacks[1] = menu_item_callback_mode_change;
+    menu_item_callback_mode_change(g, 0, 1);
+    strcpy(g->menu.item_strs[2], "QUIT");
+    g->menu.item_callbacks[2] = menu_item_callback_quit;
 
-    g->gravity = 0;
-    g->gcount = g->gcount;
-    g->gravity_multiplier = 20;
-
-    g->lock_delay = 30;
-    g->inf_lock_delay = false;
-    g->ldcount = g->lock_delay;
-
-    g->line_are = 41;
-    g->are = 30;
-    g->arecount = -1 * g->timer;
-
-    g->das = 14;
-    g->dascount = 0;
-    g->das_direction = 0;
+    game_reset(g);
 }
+
 
 static inline void game_process_input(Game* g)
 {
@@ -589,8 +791,7 @@ static inline void game_process_input(Game* g)
 
     g->old_keys = g->curr_keys;
 
-    u32 i;
-    for (i = 0; i < NUM_KEY_NAMES; i++)
+    for (int i = 0; i < NUM_KEY_NAMES; i++)
     {
         if (k_held & g->key_config[i])
         {
@@ -600,11 +801,6 @@ static inline void game_process_input(Game* g)
         {
             g->curr_keys &= ~(1 << i);
         }
-    }
-
-    if (hidKeysDown() & KEY_START)
-    {
-        g->menu_state = MS__PAUSED;
     }
 }
 
@@ -616,7 +812,7 @@ static inline void game_update(Game* g)
     {
         if (g->das_direction == -1)
         {
-            if (g->dascount < g->das)
+            if (g->dascount < g->p.speeds[g->current_speed_index].das)
             {
                 g->dascount += 1;
             }
@@ -631,7 +827,7 @@ static inline void game_update(Game* g)
     {
         if (g->das_direction == 1)
         {
-            if (g->dascount < g->das)
+            if (g->dascount < g->p.speeds[g->current_speed_index].das)
             {
                 g->dascount += 1;
             }
@@ -650,7 +846,7 @@ static inline void game_update(Game* g)
     if (g->arecount > 0)
     {
         g->arecount -= 1;
-        if (g->arecount == g->line_are / 2)
+        if (g->arecount == g->p.speeds[g->current_speed_index].line_are / 2)
         {
             cascade(g->board);
         }
@@ -674,9 +870,9 @@ static inline void game_update(Game* g)
             }
 
             // movement
-            if (g->dascount >= g->das)
+            if (g->dascount >= g->p.speeds[g->current_speed_index].das)
             {
-                ASSERT(g->das == g->dascount, " ");
+                ASSERT(g->p.speeds[g->current_speed_index].das == g->dascount, " ");
                 horiz_move(g->board, &(g->piece), g->das_direction);
             }
             else if (((g->curr_keys & KN__LEFT) && !(g->old_keys & KN__LEFT)))
@@ -698,15 +894,20 @@ static inline void game_update(Game* g)
         {
             next_piece(&(g->piece), &(g->next_piece), &(g->rngstate), g->history, false);
             g->piece_inactive = false;
-            g->gcount = g->gravity;
-            g->ldcount = g->lock_delay;
+            g->gcount = 0;
+            g->ldcount = g->p.speeds[g->current_speed_index].lock_delay;
 
             g->soft_drop_frames = 0;
 
             g->level++;
-            if (g->level == g->sections[g->current_section_index])
+            if (g->level == g->p.sections[g->current_section_index])
             {
                 g->level--;
+            }
+            else if (g->current_speed_index + 1 < g->p.speeds_length &&
+                     g->level >= g->p.speeds[g->current_speed_index + 1].level)
+            {
+                g->current_speed_index++;
             }
 
             int rot_amt = 0;
@@ -736,7 +937,7 @@ static inline void game_update(Game* g)
                     continue;
                 }
                 DEBUG(printf("you lose :(\n"));
-                g->menu_state = MS__LOSE_SCREEN;
+                g->prog_state = PS__LOSE_SCREEN;
                 return;
             }
         }
@@ -757,31 +958,31 @@ static inline void game_update(Game* g)
                 }
                 else
                 {
-                    g->gcount = g->gravity;
-                    g->ldcount = g->lock_delay;
+                    g->gcount = 0;
+                    g->ldcount = g->p.speeds[g->current_speed_index].lock_delay;
                 }
             }
             else
             {
-                if (g->gcount == 0 || (g->curr_keys & KN__SOFT_DROP))
+                g->gcount += g->p.speeds[g->current_speed_index].gravity;
+                if (g->curr_keys & KN__SOFT_DROP && g->p.speeds[g->current_speed_index].gravity < 256)
                 {
-                    g->gcount = g->gravity;
-                    g->ldcount = g->lock_delay;
-                    g->piece.pos.y += 1;
-                    int i;
-                    for (i = 1; i < g->gravity_multiplier; i++)
+                    g->gcount += 256 - g->p.speeds[g->current_speed_index].gravity;
+                }
+                if (g->gcount >= 256)
+                {
+                    do
                     {
+                        g->gcount -= 256;
                         g->piece.pos.y += 1;
                         if (!check_move(g->board, &(g->piece)))
                         {
                             g->piece.pos.y -= 1;
+                            // TODO: nail down behavior of when piece moves back and forth over block
                             break;
                         }
-                    }
-                }
-                else
-                {
-                    g->gcount -= 1;
+                        g->ldcount = g->p.speeds[g->current_speed_index].lock_delay;
+                    } while (g->gcount >= 256);
                 }
             }
         }
@@ -795,7 +996,7 @@ static inline void game_update(Game* g)
             {
                 lock(g);
             }
-            else if (!g->inf_lock_delay)
+            else if (g->p.speeds[g->current_speed_index].lock_delay != INF_LOCK_DELAY)
             {
                 g->ldcount -= 1;
             }
@@ -807,10 +1008,9 @@ static void fill_rect(u8* frame_buffer, int x, int y, int w, int h, Color c)
 {
     y = 240 - y;
     int xw = x + w, yh = y - h;
-    int i, j;
-    for (i = y; i > yh; i--)
+    for (int i = y; i > yh; i--)
     {
-        for (j = x; j < xw; j++)
+        for (int j = x; j < xw; j++)
         {
             frame_buffer[3 * (i + 240 * j)] = c.b;
             frame_buffer[3 * (i + 240 * j) + 1] = c.g;
@@ -831,7 +1031,7 @@ static void draw_int(u8* frame_buffer, int n, u8 scale, int x, int y, Color c)
 
     for (;;)
     {
-        int row, col, digit;
+        int digit;
         if (n == -1)
         {
             n = 0;
@@ -841,9 +1041,10 @@ static void draw_int(u8* frame_buffer, int n, u8 scale, int x, int y, Color c)
         {
             digit = n % 10;
         }
-        for (row = 0; row < 5 * scale; row++)
+
+        for (int row = 0; row < 5 * scale; row++)
         {
-            for (col = 0; col < 4 * scale; col++)
+            for (int col = 0; col < 4 * scale; col++)
             {
                 if (DIGITS[digit][row / scale][col / scale])
                 {
@@ -875,12 +1076,11 @@ static void draw_int(u8* frame_buffer, int n, u8 scale, int x, int y, Color c)
 static void draw_str(u8* frame_buffer, const char* str, int len, u8 scale, int x, int y, Color c)
 {
     y = 240 - y;
-    int row, col, i;
-    for (i = 0; i < len; i++)
+    for (int i = 0; i < len; i++)
     {
-        for (row = 0; row < 6 * scale; row++)
+        for (int row = 0; row < 6 * scale; row++)
         {
-            for (col = 0; col < 5 * scale; col++)
+            for (int col = 0; col < 5 * scale; col++)
             {
                 if (FONT[str[i] - 32][row / scale][col / scale])
                 {
@@ -908,24 +1108,27 @@ static inline void game_render(Game* g, u8* frame_buffer)
     if (g->piece_inactive)
     {
         c = TETROMINO_COLORS[0];
-        bar_width = 102.0 * ((double)g->arecount / g->line_are);
+        bar_width = 102.0 * ((double)g->arecount / g->p.speeds[g->current_speed_index].line_are);
     }
     else if (is_on_floor(g->board, &(g->piece)))
     {
         c = TETROMINO_COLORS[3];
-        bar_width = 102.0 * ((double)g->ldcount / g->lock_delay);
+        bar_width = 102.0 * ((double)g->ldcount / g->p.speeds[g->current_speed_index].lock_delay);
     }
     else
     {
         c = TETROMINO_COLORS[5];
-        bar_width = 102.0 * ((double)g->gcount / g->gravity);
+        bar_width = 102.0 * (1.0 - (double)g->gcount / 256.0);
+    }
+    if (bar_width > 102.0)
+    {
+        bar_width = 102.0;
     }
     fill_rect(frame_buffer, 149, 223, bar_width, 10, c);
 
-    int row, col;
-    for (row = 2; row < BOARD_HEIGHT; row++)
+    for (int row = 2; row < BOARD_HEIGHT; row++)
     {
-        for (col = 0; col < BOARD_WIDTH; col++)
+        for (int col = 0; col < BOARD_WIDTH; col++)
         {
             //DEBUG(printf("%d   %d", row, col));
             if (g->board[row][col] != 0)
@@ -938,9 +1141,9 @@ static inline void game_render(Game* g, u8* frame_buffer)
         }
     }
 
-    for (row = 0; row < 4; row++)
+    for (int row = 0; row < 4; row++)
     {
-        for (col = 0; col < 4; col++)
+        for (int col = 0; col < 4; col++)
         {
             if (!g->piece_inactive && TETROMINOS[g->piece.tet][g->piece.rot][row][col] != 0
                 && (row + g->piece.pos.y) >= 2)
@@ -956,8 +1159,7 @@ static inline void game_render(Game* g, u8* frame_buffer)
             }
 
 /*            DEBUG(
-              int i;
-              for (i = 0; i < HISTORY_LENGTH; i++)
+              for (int i = 0; i < HISTORY_LENGTH; i++)
               {
               if (TETROMINOS[g->history[i]][0][row][col] != 0)
               {
@@ -973,7 +1175,7 @@ static inline void game_render(Game* g, u8* frame_buffer)
     c.g = 0x20;
     c.r = 0x05;
     fill_rect(frame_buffer, 85, 210, 38, 16, c);
-    if (g->dascount < g->das)
+    if (g->dascount < g->p.speeds[g->current_speed_index].das)
     {
         c.g = 0x50;
     }
@@ -988,7 +1190,7 @@ static inline void game_render(Game* g, u8* frame_buffer)
     c.g = 0xFF;
     c.r = 0xFF;
     draw_int(frame_buffer, g->level, 3, 320, 100, c);
-    draw_int(frame_buffer, g->sections[g->current_section_index], 3, 320, 130, c);
+    draw_int(frame_buffer, g->p.sections[g->current_section_index], 3, 320, 130, c);
 
     u8 grade = current_grade(g);
     draw_str(frame_buffer, GRADE_STRINGS[grade], 2, 3, 40, 40, c);
@@ -1016,15 +1218,15 @@ static inline void game_render(Game* g, u8* frame_buffer)
     {
         sprintf(temp_str, "---");
     }
-    else if (GRADE_SCORES[grade + 1] == GRADE_SCORES__TRIMARK)
+    else if (GRADE_SCORES[grade + 1] == GRADE_SCORES__HEXMARK)
     {
-        sprintf(temp_str, "???");
+        sprintf(temp_str, "??????");
     }
     else
     {
         sprintf(temp_str, "%lu", GRADE_SCORES[grade + 1]);
     }
-    u8 l = strlen(temp_str);
+    u8 l = strlen(temp_str);  // can you get this out of sprintf?
     draw_str(frame_buffer, temp_str, l, 1, 120 - 6 * l, 160, c);
 
     memset(temp_str, 0, sizeof(temp_str));
@@ -1039,19 +1241,72 @@ static inline void game_render(Game* g, u8* frame_buffer)
 }
 
 
-static inline void input_update_render(Game* g, u8* frame_buffer)
+static inline void menu_update(Game *g, u32 k_down)
+{
+    if (k_down & KEY_START)
+    {
+        game_reset(g);
+        g->prog_state = PS__IN_GAME;
+    }
+    else if (k_down & (KEY_A | KEY_DLEFT | KEY_DRIGHT))
+    {
+        g->menu.item_callbacks[g->menu.cursor_pos](g, k_down, g->menu.cursor_pos);
+    }
+    else if (k_down & KEY_DUP)
+    {
+        g->menu.cursor_pos += NUM_MENU_ITEMS;
+        g->menu.cursor_pos--;
+        g->menu.cursor_pos %= NUM_MENU_ITEMS;
+    }
+    else if (k_down & KEY_DDOWN)
+    {
+        g->menu.cursor_pos++;
+        g->menu.cursor_pos %= NUM_MENU_ITEMS;
+    }
+    else if (k_down & KEY_SELECT)
+    {
+        g->prog_state = PS__QUITTING;
+    }
+
+
+    /* if (hidKeysHeld() & KEY_L) */
+    /*     g->inf_lock_delay = true; */
+}
+
+static inline void menu_render(Game *g, u8 *frame_buffer)
+{
+    memset(frame_buffer, 0, 240 * 400 * 3);
+
+    Color c = {0xFF, 0xFF, 0xFF};
+
+    for (int i = 0; i < NUM_MENU_ITEMS; i++)
+    {
+        // TODO: perhaps replace the strlen, it's kind of wasted effort
+        draw_str(frame_buffer, g->menu.item_strs[i], strlen(g->menu.item_strs[i]), 2, 80, 20 + 16 * i, c);
+    }
+
+    fill_rect(frame_buffer, 69, 24 + 16 * g->menu.cursor_pos, 5, 5, c);
+}
+
+
+static inline void input_update_render(Game *g, u8 *frame_buffer)
 {
     u32 k_down = hidKeysDown();
 
-    switch (g->menu_state)
+    switch (g->prog_state)
     {
-    case MS__IN_GAME:
+    case PS__IN_GAME:
         game_process_input(g);
         game_update(g);
         game_render(g, frame_buffer);
+
+        if (k_down & KEY_START)
+        {
+            g->prog_state = PS__PAUSED;
+        }
         break;
 
-    case MS__PAUSED:
+    case PS__PAUSED:
         game_render(g, frame_buffer);
         fill_rect(frame_buffer, 149, 20, 102, 202, (Color){0x20, 0x20, 0x20});
         fill_rect(frame_buffer, 151, 115, 99, 25, (Color){0x00, 0x00, 0x00});
@@ -1059,43 +1314,41 @@ static inline void input_update_render(Game* g, u8* frame_buffer)
 
         if (k_down & (KEY_START | KEY_A | KEY_B))
         {
-            g->menu_state = MS__IN_GAME;
+            g->prog_state = PS__IN_GAME;
         }
         else if (k_down & KEY_SELECT)
         {
-            g->menu_state = MS__LOSE_SCREEN;
+            g->prog_state = PS__LOSE_SCREEN;
         }
         break;
 
-    case MS__LOSE_SCREEN:
+    case PS__LOSE_SCREEN:
         game_render(g, frame_buffer);
         fill_rect(frame_buffer, 151, 115, 99, 25, (Color){0x00, 0x00, 0x00});
         draw_str(frame_buffer, "YOU LOSE", 8, 2, 153, 120, (Color){0x00, 0x00, 0xFF});
 
-        if (k_down & (KEY_START | KEY_A | KEY_B))
+        if (k_down & (KEY_START | KEY_A))
         {
-            game_init(g);
-            if (hidKeysHeld() & KEY_L)
-                g->inf_lock_delay = true;
-            g->menu_state = MS__IN_GAME;
+            game_reset(g);
+            g->prog_state = PS__IN_GAME;
         }
-        else if (k_down & KEY_SELECT)
+        else if (k_down & (KEY_SELECT | KEY_B))
         {
-            g->menu_state = MS__QUITTING;
+            g->prog_state = PS__MAIN_MENU;
         }
         break;
 
-    case MS__MAIN_MENU:
-        //memset(frame_buffer, 0, 240 * 400 * 3);
-        ASSERT(0, "MS__MAIN_MENU incomplete");
+    case PS__MAIN_MENU:
+        menu_update(g, k_down);
+        menu_render(g, frame_buffer);
         break;
 
-    case MS__QUITTING:
+    case PS__QUITTING:
         // intentionally left blank, quitting is handled in the main loop
         break;
 
     default:
-        ASSERT(0, "menu_state is an invalid value %d", g->menu_state);
+        ASSERT(0, "prog_state is an invalid value %d", g->prog_state);
     }
 }
 
@@ -1110,7 +1363,7 @@ int main()
 
     Game g;
     game_init(&g);
-    g.menu_state = MS__LOSE_SCREEN;
+    g.prog_state = PS__MAIN_MENU;
 
     int frame_count = 0;
 
@@ -1133,7 +1386,7 @@ int main()
 
         input_update_render(&g, frame_buffer);
 
-        if (g.menu_state == MS__QUITTING)
+        if (g.prog_state == PS__QUITTING)
             break;
 
         gfxFlushBuffers();
