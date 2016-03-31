@@ -13,6 +13,7 @@
             printf(__VA_ARGS__);                                \
             for (;;) {}                                         \
         })
+#define MAX(a,b) (((a)>(b))?(a):(b))
 
 
 typedef struct Game Game;
@@ -506,12 +507,13 @@ static inline void lock(Game* g)
     u8 lines_cleared = check_clear_lines(g->board, &bravo);
     if (lines_cleared == 0)
     {
-        g->arecount = g->p.speeds[g->current_speed_index].are;
+        // TODO: i'm pretty sure this timing is right for TAP at least but need to check TGM1
+        g->arecount = g->p.speeds[g->current_speed_index].are + 3;
         g->combo = 1;
     }
     else
     {
-        g->arecount = g->p.speeds[g->current_speed_index].line_are;
+        g->arecount = g->p.speeds[g->current_speed_index].line_are + 1;
         ASSERT(lines_cleared > 0 && lines_cleared < 5, "%hhd", lines_cleared);
 
         // https://tetris.wiki/Tetris_The_Grand_Master#Scoring
@@ -550,13 +552,14 @@ static inline void game_reset(Game* g)
     for (int i = 0; i < 100; i++) next_piece__randpiece(&(g->rngstate));
     DEBUG(printf("%llu\n", g->rngstate));
 
-    g->timer = -60; // to reach zero when piece actually starts
+    g->timer = -59; // to reach one when piece actually starts
 
     g->curr_keys = 0;
     g->old_keys = 0;
 
     memset(g->board, 0, BOARD_HEIGHT * BOARD_WIDTH);
 
+    // TODO: fix history for non-tgm1 modes
     _Static_assert(HISTORY_LENGTH == 4, "need to update history initialization");
     g->history[0] = PIECE__Z;
     g->history[1] = PIECE__Z;
@@ -577,7 +580,7 @@ static inline void game_reset(Game* g)
     g->piece_inactive = true;
     g->gcount = 0;
     g->ldcount = g->p.speeds[g->current_speed_index].lock_delay;
-    g->arecount = -g->timer;
+    g->arecount = -g->timer + 1;
     g->dascount = 0;
     g->das_direction = 0;
 }
@@ -952,18 +955,12 @@ static inline void game_update(Game* g)
                 } while (check_move(g->board, &(g->piece)));
                 g->piece.pos.y -= 1;
 
-                if (g->curr_keys & KN__HARD_DROP)
-                {
-                    lock(g);
-                }
-                else
-                {
-                    g->gcount = 0;
-                    g->ldcount = g->p.speeds[g->current_speed_index].lock_delay;
-                }
+                g->gcount = 0;
+                g->ldcount = g->p.speeds[g->current_speed_index].lock_delay;
             }
             else
             {
+                // TODO: this doesn't appear to precisely match what tgm does
                 g->gcount += g->p.speeds[g->current_speed_index].gravity;
                 if (g->curr_keys & KN__SOFT_DROP && g->p.speeds[g->current_speed_index].gravity < 256)
                 {
@@ -986,7 +983,8 @@ static inline void game_update(Game* g)
                 }
             }
         }
-        else
+
+        if (is_on_floor(g->board, &(g->piece))) // have to check again cause gravity
         {
             if ((g->curr_keys & KN__SOFT_DROP) || (g->curr_keys & KN__HARD_DROP))
             {
@@ -1108,7 +1106,9 @@ static inline void game_render(Game* g, u8* frame_buffer)
     if (g->piece_inactive)
     {
         c = TETROMINO_COLORS[0];
-        bar_width = 102.0 * ((double)g->arecount / g->p.speeds[g->current_speed_index].line_are);
+        u8 max_are = MAX(g->p.speeds[g->current_speed_index].line_are + 1,
+                         g->p.speeds[g->current_speed_index].are + 3);
+        bar_width = 102.0 * ((double)g->arecount / max_are);
     }
     else if (is_on_floor(g->board, &(g->piece)))
     {
@@ -1296,14 +1296,18 @@ static inline void input_update_render(Game *g, u8 *frame_buffer)
     switch (g->prog_state)
     {
     case PS__IN_GAME:
-        game_process_input(g);
-        game_update(g);
+        if (/*k_down & KEY_R &&*/ 1)
+        {
+            game_process_input(g);
+            game_update(g);
+        }
         game_render(g, frame_buffer);
 
         if (k_down & KEY_START)
         {
             g->prog_state = PS__PAUSED;
         }
+
         break;
 
     case PS__PAUSED:
@@ -1402,7 +1406,5 @@ int main()
 
 /*
  * TODO
- * frame-step debug button
  * button remapping (inc multiple keys per same button)
- * an actual menu???
  */
